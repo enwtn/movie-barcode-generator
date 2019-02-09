@@ -8,22 +8,43 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"sync"
 
 	"golang.org/x/image/bmp"
 )
 
+var finalPixels [][]Pixel
+var base = "D:\\AVGFRAME\\frames\\"
+var numWorkers = 8
+
+var numFrames int
+var framesCompleted int
+
 func main() {
-	base := "D:\\AVGFRAME\\frames\\"
 	image.RegisterFormat("bmp", "bmp", bmp.Decode, bmp.DecodeConfig)
 	files, _ := ioutil.ReadDir(base)
+	numFrames = len(files)
 	//TODO: automate get frame size
-	var finalPixels = make([][]Pixel, 816)
+	finalPixels = make([][]Pixel, 816)
 	for i := range finalPixels {
-		finalPixels[i] = make([]Pixel, 1920)
+		finalPixels[i] = make([]Pixel, numFrames)
 	}
 
-	for i, f := range files {
-		file, err := os.Open(base + f.Name())
+	frames := numFrames / numWorkers
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+
+	for i := 0; i < numWorkers; i++ {
+		go calculateColumns(files, &wg, i*frames, (i+1)*frames)
+	}
+	wg.Wait()
+
+	createImage(finalPixels)
+}
+
+func calculateColumns(files []os.FileInfo, wg *sync.WaitGroup, start int, end int) {
+	for i := start; i < end; i++ {
+		file, err := os.Open(base + files[i].Name())
 		if err != nil {
 			fmt.Println("Error: File could not be opened")
 			os.Exit(1)
@@ -40,11 +61,15 @@ func main() {
 			finalPixels[j][i] = avgPixels(pixels[j])
 		}
 
-		var percentage = float32(i) / float32(len(files)-1) * 100
-		fmt.Printf("\rAnalysing frames: %4.1f%%", percentage)
+		updateProgress()
 	}
+	wg.Done()
+}
 
-	createImage(finalPixels)
+func updateProgress() {
+	framesCompleted++
+	var percentage = float32(framesCompleted) / float32(numFrames) * 100
+	fmt.Printf("\rAnalysing frames: %4.1f%%", percentage)
 }
 
 func avgPixels(row []Pixel) (p Pixel) {
