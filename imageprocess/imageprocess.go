@@ -8,7 +8,8 @@ import (
 	"os"
 )
 
-func AveragePixels(row []Pixel) (p Pixel) {
+// AveragePixels takes an array of pixels and averages the RGB values of them
+func AveragePixels(row []Pixel) Pixel {
 	avg := Pixel{0, 0, 0}
 
 	for _, pixel := range row {
@@ -78,14 +79,6 @@ type Pixel struct {
 	R int
 	G int
 	B int
-}
-
-func addPixels(p [][]Pixel, p1 [][]Pixel) {
-	for i := range p {
-		for j := range p[0] {
-			p[i][j].add(p1[i][j])
-		}
-	}
 }
 
 func (p *Pixel) add(p1 Pixel) {
