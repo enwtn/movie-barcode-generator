@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
@@ -16,7 +15,7 @@ import (
 	"golang.org/x/image/bmp"
 )
 
-const numWorkers = 8
+const numWorkers = 1
 
 var finalPixels [][]imageprocess.Pixel
 var numFrames int
@@ -42,7 +41,8 @@ func main() {
 	}
 
 	frames := totalFrames / numWorkers
-	frameGap := numFrames / totalFrames
+	frameGap := totalFrames / numFrames
+
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
 
@@ -56,11 +56,10 @@ func main() {
 
 func calculateColumns(filename string, start int, end int, frameGap int, wg *sync.WaitGroup) {
 	for i := start; i < end; i += frameGap {
-		fmt.Println(filename, i)
 		pixels := getFrame(filename, i)
 
 		for j := range pixels {
-			finalPixels[j][i] = imageprocess.AveragePixels(pixels[j])
+			finalPixels[j][i/frameGap] = imageprocess.AveragePixels(pixels[j])
 		}
 
 		updateProgress()
@@ -78,8 +77,7 @@ func getFrame(filename string, index int) [][]imageprocess.Pixel {
 		log.Fatal(err)
 	}
 
-	o := bufio.NewReader(&out)
-	pixels, err := imageprocess.GetPixels(o)
+	pixels, err := imageprocess.GetPixels(&out)
 	if err != nil {
 		fmt.Println("OOF" + strconv.Itoa(index))
 		log.Fatal(err)
