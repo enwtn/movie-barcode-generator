@@ -1,1 +1,0 @@
-ffmpeg -accurate_seek -ss 3000 -i Jumper.2008.1080p.BRrip.x264.mp4 -frames:v 1 -hide_banner -loglevel 0 pipe:.bmp > oof.bmp

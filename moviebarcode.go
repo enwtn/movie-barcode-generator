@@ -15,7 +15,7 @@ import (
 	"golang.org/x/image/bmp"
 )
 
-const numWorkers = 1
+const numWorkers = 8
 
 var finalPixels [][]imageprocess.Pixel
 var numFrames int
@@ -34,6 +34,7 @@ func main() {
 	}
 
 	_, height := getVideoResolution(*srcFile)
+	frameRate := getFrameRate(*srcFile)
 
 	finalPixels = make([][]imageprocess.Pixel, height)
 	for i := range finalPixels {
@@ -45,21 +46,23 @@ func main() {
 
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
-
 	for i := 0; i < numWorkers; i++ {
-		go calculateColumns(*srcFile, i*frames, (i+1)*frames, frameGap, &wg)
+		go calculateColumns(*srcFile, i*frames, (i+1)*frames-1, frameGap, frameRate, &wg)
 	}
 	wg.Wait()
 
 	imageprocess.CreateImage(finalPixels)
 }
 
-func calculateColumns(filename string, start int, end int, frameGap int, wg *sync.WaitGroup) {
+func calculateColumns(filename string, start int, end int, frameGap int, frameRate float32, wg *sync.WaitGroup) {
 	for i := start; i < end; i += frameGap {
-		pixels := getFrame(filename, i)
-
+		time := float32(i) / frameRate
+		pixels := getFrame(filename, time)
 		for j := range pixels {
-			finalPixels[j][i/frameGap] = imageprocess.AveragePixels(pixels[j])
+			// don't know why this is neccesary
+			if i/frameGap < len(finalPixels[0]) {
+				finalPixels[j][i/frameGap] = imageprocess.AveragePixels(pixels[j])
+			}
 		}
 
 		updateProgress()
@@ -67,8 +70,9 @@ func calculateColumns(filename string, start int, end int, frameGap int, wg *syn
 	wg.Done()
 }
 
-func getFrame(filename string, index int) [][]imageprocess.Pixel {
-	cmd := exec.Command("ffmpeg", "-accurate_seek", "-ss", strconv.Itoa(index), "-i",
+func getFrame(filename string, time float32) [][]imageprocess.Pixel {
+	t := fmt.Sprintf("%f", time)
+	cmd := exec.Command("ffmpeg", "-accurate_seek", "-ss", t, "-i",
 		filename, "-frames:v", "1", "-hide_banner", "-loglevel", "0", "pipe:.bmp")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -79,10 +83,28 @@ func getFrame(filename string, index int) [][]imageprocess.Pixel {
 
 	pixels, err := imageprocess.GetPixels(&out)
 	if err != nil {
-		fmt.Println("OOF" + strconv.Itoa(index))
+		fmt.Println("OOF" + t)
 		log.Fatal(err)
 	}
 	return pixels
+}
+
+func getFrameRate(filename string) float32 {
+	cmd := exec.Command("ffprobe", "-v", "0", "-of", "csv=p=0", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", filename)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+	parts := strings.Split(strings.TrimRight(out.String(), "\r\n"), "/")
+	numerator, err := strconv.Atoi(parts[0])
+	denominator, err := strconv.Atoi(parts[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+	frameRate := float32(float64(numerator) / float64(denominator))
+	return frameRate
 }
 
 func getNumFrames(filename string) int {
@@ -133,23 +155,3 @@ func updateProgress() {
 	var percentage = float32(framesCompleted) / float32(numFrames) * 100
 	fmt.Printf("\rAnalysing frames: %4.1f%%", percentage)
 }
-
-// func test(filename string, index int) {
-// 	cmd := exec.Command("ffmpeg", "-accurate_seek", "-ss", strconv.Itoa(index), "-i",
-// 		filename, "-frames:v", "1", "-hide_banner", "-loglevel", "0", "pipe:.bmp")
-// 	var out bytes.Buffer
-// 	cmd.Stdout = &out
-// 	err := cmd.Run()
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-
-// o := bufio.NewReader(&out)
-
-// outputfile, err := os.Create("test.bmp")
-// if err != nil {
-// 	log.Fatal(err)
-// }
-// defer outputfile.Close()
-// io.Copy(outputfile, o)
-// }
