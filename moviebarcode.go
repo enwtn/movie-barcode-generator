@@ -83,7 +83,7 @@ func getFrame(filename string, time float32) [][]imageprocess.Pixel {
 
 	pixels, err := imageprocess.GetPixels(&out)
 	if err != nil {
-		fmt.Println("OOF" + t)
+		fmt.Println("Error at:" + t)
 		log.Fatal(err)
 	}
 	return pixels
