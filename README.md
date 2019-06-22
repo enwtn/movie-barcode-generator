@@ -1,4 +1,4 @@
-# Movie Barcode Editor
+# Movie Barcode Generator
 ![Jumper](https://raw.githubusercontent.com/en3wton/movie-barcode-generator/master/example-images/jumper-header.png "Jumper 2008")
 
 A program to generate "Movie Barcodes".  
