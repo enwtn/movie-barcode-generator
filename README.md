@@ -4,6 +4,8 @@
 A program to generate "Movie Barcodes".  
 Idea stolen from http://moviebarcode.tumblr.com/ and various others
 
+**It's really slow and sometimes doesn't work. :)**
+
 **Requirements**
 * ffmpeg
 * ffprobe
