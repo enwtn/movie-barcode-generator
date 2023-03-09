@@ -8,8 +8,19 @@ use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::prelude::*;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let num_frames = &env::args()
+        .nth(2)
+        .map(|v| v.parse::<usize>())
+        .unwrap_or_else(|| panic!("Must specify number of frames (width)"))
+        .ok()
+        .unwrap_or_else(|| panic!("Invalid num frames specified"));
+
     ffmpeg::init().unwrap();
 
     if let Ok(mut ictx) = input(&env::args().nth(1).expect("Cannot open file.")) {
@@ -18,6 +29,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             .best(Type::Video)
             .ok_or(ffmpeg::Error::StreamNotFound)?;
         let video_stream_index = input.index();
+
+        let take_x_frames: usize = input.frames() as usize / *num_frames;
+        if (take_x_frames < 1) {
+            panic!("num frames specified is less than total number of frames reported by video");
+        }
+
+        println!("take {} frames", take_x_frames);
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
         let mut decoder = context_decoder.decoder().video()?;
@@ -32,41 +50,67 @@ fn main() -> Result<(), Box<dyn Error>> {
             Flags::BILINEAR,
         )?;
 
-        let mut frame_index = 0;
-        let mut column_colours: Vec<Vec<Colour>> = Vec::new();
+        let threadpool = threadpool::Builder::new().queue_size(30).build();
+        let (tx, rx) = channel::<(Vec<Colour>, usize)>();
 
-        let mut receive_and_process_decoded_frames =
-            |decoder: &mut ffmpeg::decoder::Video| -> Result<(), ffmpeg::Error> {
-                let mut decoded = Video::empty();
-                while decoder.receive_frame(&mut decoded).is_ok() {
-                    let mut rgb_frame = Video::empty();
-                    scaler.run(&decoded, &mut rgb_frame)?;
+        let frame_index = Arc::new(AtomicUsize::new(0));
 
-                    println!("frame{}", frame_index);
+        let mut receive_and_process_decoded_frames = |decoder: &mut ffmpeg::decoder::Video,
+                                                      frame_index: &Arc<AtomicUsize>|
+         -> Result<(), ffmpeg::Error> {
+            let mut decoded = Video::empty();
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                let index = frame_index.fetch_add(1, Ordering::SeqCst);
 
-                    column_colours.push(get_avg_colours(&rgb_frame));
-
-                    frame_index +=1 ;
+                if index % take_x_frames != 0 {
+                    continue;
                 }
-                Ok(())
-            };
+
+                let mut rgb_frame = Video::empty();
+                scaler.run(&decoded, &mut rgb_frame)?;
+
+                let sender = tx.clone();
+
+                threadpool.execute(move || {
+                    if let Err(_e) = sender.send((get_avg_colours(&rgb_frame), index)) {
+                        panic!("whoops")
+                    }
+
+                    println!("processed frame {}", index);
+                })
+            }
+            Ok(())
+        };
 
         for (stream, packet) in ictx.packets() {
             if stream.index() == video_stream_index {
                 decoder.send_packet(&packet)?;
-                receive_and_process_decoded_frames(&mut decoder)?;
+                receive_and_process_decoded_frames(&mut decoder, &frame_index.clone())?;
             }
         }
 
         decoder.send_eof()?;
-        receive_and_process_decoded_frames(&mut decoder)?;
+        receive_and_process_decoded_frames(&mut decoder, &frame_index)?;
+
+        threadpool.join();
+        std::mem::drop(threadpool);
+
+        println!("Receiving columns");
+
+        let mut columns: Vec<(Vec<Colour>, usize)> = rx
+            .iter()
+            .take((frame_index.load(Ordering::SeqCst) - 1) / take_x_frames)
+            .collect();
+        columns.sort_by(|(_a, a_index), (_b, b_index)| a_index.cmp(b_index));
+        let column_colours: Vec<&Vec<Colour>> =
+            columns.iter().map(|(colours, _index)| colours).collect();
 
         println!("Saving frame");
 
         let width = column_colours.len();
         let height = column_colours[0].len();
 
-        let final_frame = get_final_frame(&column_colours);
+        let final_frame = get_final_frame(column_colours);
         save_frame(&final_frame, width as u32, height as u32)?;
     }
 
@@ -107,7 +151,7 @@ fn get_avg_colours(frame: &Video) -> Vec<Colour> {
         .collect();
 }
 
-fn get_final_frame(column_colours: &Vec<Vec<Colour>>) -> Vec<u8> {
+fn get_final_frame(column_colours: Vec<&Vec<Colour>>) -> Vec<u8> {
     let width = column_colours.len();
     let height = column_colours[0].len();
 

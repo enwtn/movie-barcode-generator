@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 ffmpeg-next = "5.1.1"
+threadpool = { git = "https://github.com/en3wton/rust-threadpool.git", branch="master" }
