@@ -30,12 +30,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or(ffmpeg::Error::StreamNotFound)?;
         let video_stream_index = input.index();
 
-        let take_x_frames: usize = input.frames() as usize / *num_frames;
-        if (take_x_frames < 1) {
+        if (input.frames() as usize) < *num_frames {
             panic!("num frames specified is less than total number of frames reported by video");
         }
 
-        println!("take {} frames", take_x_frames);
+        let frame_interval: usize = input.frames() as usize / *num_frames;
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
         let mut decoder = context_decoder.decoder().video()?;
@@ -55,14 +54,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let frame_index = Arc::new(AtomicUsize::new(0));
 
-        let mut receive_and_process_decoded_frames = |decoder: &mut ffmpeg::decoder::Video,
-                                                      frame_index: &Arc<AtomicUsize>|
+        let mut process_frames = |decoder: &mut ffmpeg::decoder::Video,
+                                  frame_index: &Arc<AtomicUsize>|
          -> Result<(), ffmpeg::Error> {
             let mut decoded = Video::empty();
             while decoder.receive_frame(&mut decoded).is_ok() {
                 let index = frame_index.fetch_add(1, Ordering::SeqCst);
 
-                if index % take_x_frames != 0 {
+                if index % frame_interval != 0 {
                     continue;
                 }
 
@@ -72,8 +71,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let sender = tx.clone();
 
                 threadpool.execute(move || {
-                    if let Err(_e) = sender.send((get_avg_colours(&rgb_frame), index)) {
-                        panic!("whoops")
+                    if let Err(e) = sender.send((get_avg_colours(&rgb_frame), index)) {
+                        panic!("{}", e)
                     }
 
                     println!("processed frame {}", index);
@@ -85,27 +84,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         for (stream, packet) in ictx.packets() {
             if stream.index() == video_stream_index {
                 decoder.send_packet(&packet)?;
-                receive_and_process_decoded_frames(&mut decoder, &frame_index.clone())?;
+                process_frames(&mut decoder, &frame_index.clone())?;
             }
         }
 
         decoder.send_eof()?;
-        receive_and_process_decoded_frames(&mut decoder, &frame_index)?;
+        process_frames(&mut decoder, &frame_index)?;
 
         threadpool.join();
         std::mem::drop(threadpool);
 
-        println!("Receiving columns");
-
         let mut columns: Vec<(Vec<Colour>, usize)> = rx
             .iter()
-            .take((frame_index.load(Ordering::SeqCst) - 1) / take_x_frames)
+            .take((frame_index.load(Ordering::SeqCst) - 1) / frame_interval)
             .collect();
+
         columns.sort_by(|(_a, a_index), (_b, b_index)| a_index.cmp(b_index));
+
         let column_colours: Vec<&Vec<Colour>> =
             columns.iter().map(|(colours, _index)| colours).collect();
 
-        println!("Saving frame");
+        println!("Saving image...");
 
         let width = column_colours.len();
         let height = column_colours[0].len();
